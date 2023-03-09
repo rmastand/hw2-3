@@ -5,6 +5,11 @@
 
 // Put any static global variables here that you will use throughout the simulation.
 int blks;
+__global__ static int NUM_BLOCKS;
+__global__ static int tot_num_bins;
+__global__ int* bins;
+__global__ int *part_links;
+
 
 __device__ void apply_force_gpu(particle_t& particle, particle_t& neighbor) {
     double dx = neighbor.x - particle.x;
@@ -66,12 +71,6 @@ __global__ void move_gpu(particle_t* particles, int num_parts, double size) {
 }
 
 
-// Define variables visible to all devices
-__global__ static int NUM_BLOCKS;
-__global__ static int tot_num_bins;
-__global__ int* bins;
-__global__ int *part_links;
-
 
 void init_simulation(particle_t* parts, int num_parts, double size) {
     // You can use this space to initialize data objects that you may need
@@ -85,9 +84,16 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
     NUM_BLOCKS = size/cutoff;
     tot_num_bins = (NUM_BLOCKS+2)*(NUM_BLOCKS+2);
 
-    // Change this to cuda alloc
     bins = (int*) malloc(tot_num_bins * sizeof(int));
     part_links = (int*) malloc(num_parts * sizeof(int));
+
+    int* bins_gpu;
+    int* part_links_gpu;
+
+    cudaMalloc((void**)&bins, tot_num_bins * sizeof(int));
+    cudaMemcpy(bins_gpu, bins, tot_num_bins * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMalloc((void**)&part_links, num_parts * sizeof(int));
+    cudaMemcpy(part_links_gpu, part_links, num_parts * sizeof(int), cudaMemcpyHostToDevice);
 
 
 }
@@ -119,15 +125,11 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     }
 
     // Now compute forces between part_1 and part_2
-
     int part_1_id;
 	int part_2_id;
 
-
 	// Defined globally
-	int Nthrds, Nxthrds, Nythrds, delX, delY;
-	Nthrds = omp_get_num_threads();
-	
+	int Nthrds, Nxthrds, Nythrds, delX, delY;	
 	Nxthrds = sqrt(Nthrds); // number of divisions in x
 	Nythrds = Nthrds / Nxthrds; // number of divisions in y
 	delX = (NUM_BLOCKS / Nxthrds) + 1; // side of division in x
@@ -136,7 +138,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     int id, threadX, threadY;
 
 	// Defined only for a thread
-	id = omp_get_thread_num();
+	int tid = threadIdx.x + blockIdx.x * blockDim.x;
 	threadX = id % Nxthrds; 
 	threadY = id / Nxthrds;
 
