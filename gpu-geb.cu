@@ -76,28 +76,41 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
     // `num_parts` ptcls divided into thread blocks of size `NUM_THREADS`
     blks = (num_parts + NUM_THREADS - 1) / NUM_THREADS;
 
-    // call this "cells" (referring to the simulation grid) as distinguished
+    // call this "bins" (referring to the grid squares) as distinguished
     // from "blocks" (referring to groups of GPU threads)
-    NUM_CELLS = size/cutoff;
-    tot_num_bins = (NUM_CELLS+2)*(NUM_CELLS+2);
+    NUM_BINS = size/cutoff;
+    // tot_num_bins = (NUM_BINS+2)*(NUM_BINS+2);
 
-    float* x = new float[N];
-    float* y = new float[N];
+    //implement w/out zero-padding for now    
 
-    int size = N*sizeof(float);
-    float *d_x, *d_y; //device copies of x, y
-    cudaMalloc((void **)&d_x, size);
-    cudaMalloc((void **)&d_y, size);
+    // the number of particles in each bin
+    float *d_bin_counts;
+    cudaMalloc((void **)&d_bin_counts, (NUM_BINS+1)*sizeof(float));
 
-    cudaMemcpy(d_x, x, size, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_y, y, size, cudaMemcpyHostToDevice);
+    // particle ids
+    int *d_part_ids;
+    cudaMalloc((void **)&d_part_ids, num_parts*sizeof(int));
 
+    // bins array, organized such that the particles in bin i
+    // are `part_ids[bins[i] : bins[i + 1]]`
+    int *d_bins;
+    cudaMalloc((void **)&d_bins, (NUM_BINS+1)*sizeof(int));
 
 }
 
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // parts live in GPU memory
-    // Rewrite this function
+    
+    /*
+    TODO: 
+    - Count ptcls per bin (in parallel) by iterating thru `parts`
+    - Implement the array scheme described in lab?
+    
+    NOTE: `blks` as defined above means that each block of threads
+    takes a fixed number of *particles*, not number of *bins*.
+    */ 
+
+
 
     // Compute forces
     compute_forces_gpu<<<blks, NUM_THREADS>>>(parts, num_parts);
