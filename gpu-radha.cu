@@ -7,8 +7,8 @@
 int blks;
 __global__ static int NUM_BLOCKS;
 __global__ static int tot_num_bins;
-__global__ int* bins;
-__global__ int *part_links;
+__global__ int* bins_gpu;
+__global__ int* part_links_gpu;
 
 
 __device__ void apply_force_gpu(particle_t& particle, particle_t& neighbor) {
@@ -95,7 +95,6 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
     cudaMalloc((void**)&part_links, num_parts * sizeof(int));
     cudaMemcpy(part_links_gpu, part_links, num_parts * sizeof(int), cudaMemcpyHostToDevice);
 
-
 }
 
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
@@ -104,12 +103,12 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
 
     // Fill the bins array
     for (int i = 0; i < tot_num_bins; i++) {
-			bins[i] = -1;
+			bins_gpu[i] = -1;
 		}
 
     // Fill the particle links array
     for (int i = 0; i < num_parts; i++) {
-        part_links[i] = -1;
+        part_links_gpu[i] = -1;
     }
 
     // Assign particles to bins
@@ -120,8 +119,8 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
         int bin_id = dx + (NUM_BLOCKS+2)*dy;
 
         // -1 if bin holds -1, the bin's particle id otherwise
-        part_links[i] = bins[bin_id];
-        bins[bin_id] = i;
+        part_links_gpu[i] = bins_gpu[bin_id];
+        bins_gpu[bin_id] = i;
     }
 
     // Now compute forces between part_1 and part_2
@@ -129,6 +128,8 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
 	int part_2_id;
 
 	// Defined globally
+    // THIS I NEED TO FIGURE OUT -- HOW TO WE MAP THIS 2D THREADING TO THE BLOCKS AND THREADS OF THE GPU??
+    // I think I want a 2d block structure -- will need to ask this in OH
 	int Nthrds, Nxthrds, Nythrds, delX, delY;	
 	Nxthrds = sqrt(Nthrds); // number of divisions in x
 	Nythrds = Nthrds / Nxthrds; // number of divisions in y
@@ -176,10 +177,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
 		}
 	}
 	
-	#pragma omp barrier
-
-	// Move Particles
-	#pragma omp for
+	
     for (int i = 0; i < num_parts; ++i) {
         move(parts[i], size);
     }
