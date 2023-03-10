@@ -84,35 +84,24 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
     NUM_BLOCKS = size/cutoff;
     tot_num_bins = (NUM_BLOCKS+2)*(NUM_BLOCKS+2);
 
-    int* bins_cpu = (int*) malloc(tot_num_bins * sizeof(int));
-    int* part_links_cpu = (int*) malloc(num_parts * sizeof(int));
-
-    cudaMalloc((void**)&bins_cpu, tot_num_bins * sizeof(int));
-    cudaMemcpy(bins, bins_cpu, tot_num_bins * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMalloc((void**)&part_links_cpu, num_parts * sizeof(int));
-    cudaMemcpy(part_links, part_links_cpu, num_parts * sizeof(int), cudaMemcpyHostToDevice);
-    
-
+    cudaMalloc((void**)&bins, tot_num_bins * sizeof(int));
+    cudaMalloc((void**)&part_links, num_parts * sizeof(int));
 
 }
 
-__global__ void initialize_bins_gpu(int* bins, int* part_links, int num_parts, int tot_num_bins) {
+__global__ void initialize_array_gpu(int* array, int array_size) {
 
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
 
-    // Initialize the bins array with -1
-    if (tid < tot_num_bins) {
-        atomicExch(&bins[tid], -1);
+    // Initialize the array with -1
+    if (tid >= array_size) {
+        return; 
     }
 
-    // Initialize the particle links array
-     if (tid < num_parts) {
-        atomicExch(&part_links[tid], -1);
+        array[tid] = -1;
     }
 
-  
-}
 /*
 __global__ void assign_particles_to_bins_gpu(int* bins, int* part_links, int num_parts, particle_t* parts) {
 
@@ -142,14 +131,17 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
 
     std::cout << "a" << std::endl;
 
-    initialize_bins_gpu<<<blks, NUM_THREADS>>>(bins, part_links, num_parts, tot_num_bins);
-
     int* aaa = (int*) malloc(tot_num_bins * sizeof(int));
+
+    for (int p = 0; p < tot_num_bins; p++) {
+            std::cout << "qqqq " << p << " " << aaa[p] << std::endl;
+    }
+
+    initialize_array_gpu<<<blks, NUM_THREADS>>>(bins, tot_num_bins);
 
     cudaMemcpy(aaa, bins, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
 
-    for (int p = 0, p < tot_num_bins, p++) {
-
+    for (int p = 0; p < tot_num_bins; p++) {
             std::cout << "testing " << p << " " << aaa[p] << std::endl;
     }
   
