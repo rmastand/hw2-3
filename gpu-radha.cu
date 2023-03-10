@@ -98,7 +98,6 @@ __global__ void initialize_array_gpu(int* array, int array_size) {
     if (tid >= array_size) {
         return; 
     }
-
         array[tid] = -1;
     }
 
@@ -129,20 +128,23 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // parts live in GPU memory
     // Rewrite this function
 
-    std::cout << "a" << std::endl;
-
-    int* aaa = (int*) malloc(tot_num_bins * sizeof(int));
-
-    for (int p = 0; p < tot_num_bins; p++) {
-            std::cout << "qqqq " << p << " " << aaa[p] << std::endl;
-    }
-
+    // Initialize the bins array
     initialize_array_gpu<<<blks, NUM_THREADS>>>(bins, tot_num_bins);
+    // Initialize the particle links array
+    initialize_array_gpu<<<blks, NUM_THREADS>>>(part_links, num_parts);
 
-    cudaMemcpy(aaa, bins, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+    // test
+    int* bins_cpu = (int*) malloc(tot_num_bins * sizeof(int));
+    int* part_links_cpu = (int*) malloc(num_parts * sizeof(int));
+
+    cudaMemcpy(bins_cpu, bins, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(part_links_cpu, part_links, num_parts * sizeof(int), cudaMemcpyDeviceToHost);
 
     for (int p = 0; p < tot_num_bins; p++) {
-            std::cout << "testing " << p << " " << aaa[p] << std::endl;
+            std::cout << "testing bins " << p << " " << bins_cpu[p] << std::endl;
+    }
+    for (int p = 0; p < num_parts; p++) {
+            std::cout << "testing links " << p << " " << part_links_cpu[p] << std::endl;
     }
   
     
