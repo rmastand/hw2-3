@@ -126,28 +126,21 @@ __global__ void initialize_array_gpu(int* array, int array_size) {
         array[tid] = -1;
     }
 
-/*
-__global__ void assign_particles_to_bins_gpu(int* bins, int* part_links, int num_parts, particle_t* parts) {
-
+__global__ void assign_particles_to_bins_gpu(int* bins, int* part_links, int num_parts, particle_t* parts, double size, int NUM_BLOCKS) {
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-
     // Initialize the particle links array
      if (tid < num_parts) {
         atomicExch(&part_links[tid], -1);
-
         // Get what row and column the particle would be in, with padding
         int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
         int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
         int bin_id = dx + (NUM_BLOCKS+2)*dy;
-
         // Fill in the bins
         atomicExch(&part_links[tid], bins[bin_id]);
-        atomicExch(& bins[bin_id], tid);
+        atomicExch(&bins[bin_id], tid);
     }
-
 }
-*/
 
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // parts live in GPU memory
@@ -175,7 +168,18 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     
     std::cout << "b" << std::endl;
 
-    //assign_particles_to_bins_gpu<<<blks, NUM_THREADS>>>(bins, part_links,num_parts, parts)
+    assign_particles_to_bins_gpu<<<blks, NUM_THREADS>>>(bins, part_links,num_parts, parts, size, NUM_BLOCKS);
+
+
+    //cudaMemcpy(bins_cpu, bins, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+    // for (int p = 322; p < 350; p++) {
+    //         std::cout << "testing bins " << p << " " << bins_cpu[p] << std::endl;
+    // }
+
+    cudaMemcpy(part_links_cpu, part_links, num_parts * sizeof(int), cudaMemcpyDeviceToHost);
+    for (int p = 322; p < 350; p++) {
+            std::cout << "testing parts " << p << " " << part_links_cpu[p] << std::endl;
+    }
 
 
   
