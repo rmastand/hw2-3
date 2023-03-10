@@ -30,16 +30,41 @@ __device__ void apply_force_gpu(particle_t& particle, particle_t& neighbor) {
     particle.ay += coef * dy;
 }
 
-__global__ void compute_forces_gpu(particle_t* particles, int num_parts) {
-    // Get thread (particle) ID
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid >= num_parts)
-        return;
+__global__ void compute_forces_gpu(particle_t* particles, int* bins, int* part_links, int NUM_BLOCKS) {
+    // Get thread (particle) ID and the block id
+    int loc_tid = threadIdx.x;
+    int bid = blockIdx.x;
 
-    particles[tid].ax = particles[tid].ay = 0;
-    for (int j = 0; j < num_parts; j++)
-        apply_force_gpu(particles[tid], particles[j]);
-}
+    // Convert the block id to 2D coordinates in x and y
+        // Add 1 to take the zero padding into account
+    int block_x = (bid % NUM_BLOCKS) + 1;
+    int block_y = (bid / NUM_BLOCKS) + 1;
+    // And convert to a zero-padded bin id
+    int my_bin_id_zero_padded = (block_x+1) + (NUM_BLOCKS+2)*(block_y+1);
+
+    // WE NEED TO MAKE SURE EACH THREAD GETS ITS OWN PARTICLE
+    int part_1_id = // FILL THIS IN BASED ON loc_tid
+    //int part_1_id = //bins[my_bin_id_zero_padded];
+    int their_bin_id_zero_padded, part_2_id;
+
+    // Now apply forces in the bins for neighboring bins
+    // PROBLEM: WHAT IF THERE AREN'T ENOUGH THREADS. do a for loop in part id
+    if (part_1_id >= 0) {
+        for (int m = -1; m <= 1; m++) {
+            for (int n = -1; n <=1; n++) {
+                // Get the zero_padded bin id of the bin to compare with
+                their_bin_id_zero_padded = my_bin_id_zero_padded + n + (NUM_BLOCKS+2)*m;
+                part_2_id  = bins[their_bin_id_zero_padded];
+                while (part_2_id >= 0) {
+							apply_force_gpu(particles[part_1_id], particles[part_2_id]);
+							
+							part_2_id = part_links[part_2_id];
+						}
+					}
+				}
+			}
+		}
+
 
 __global__ void move_gpu(particle_t* particles, int num_parts, double size) {
 
