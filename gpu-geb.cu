@@ -1,10 +1,27 @@
 #include "common.h"
 #include <cuda.h>
+#include <iostream>
 
 #define NUM_THREADS 256
 
 // Put any static global variables here that you will use throughout the simulation.
-int blks;
+
+int blks; // number of GPU blocks
+int NUM_BINS; // number of bins per side of the simulationa arena
+int tot_num_bins; // total number of bins, with zero padding
+
+// bins array:
+// bins[k]=(index of first particle in bin k)
+int *d_bins;
+
+// particle linked list:
+// part_links[i]=(index of next particle in the bin)
+//              or (-1 if no more particles in the bin)
+int *d_part_links;
+
+__global__ void assign_particles_to_bins_gpu(int* bins, int* part_links, int num_parts, particle_t* parts, double size, int NUM_BLOCKS);
+__global__ void initialize_array_gpu(int* array, int array_size);
+
 
 __device__ void apply_force_gpu(particle_t& particle, particle_t& neighbor) {
     double dx = neighbor.x - particle.x;
@@ -31,8 +48,24 @@ __global__ void compute_forces_gpu(particle_t* particles, int num_parts) {
         return;
 
     particles[tid].ax = particles[tid].ay = 0;
-    for (int j = 0; j < num_parts; j++)
-        apply_force_gpu(particles[tid], particles[j]);
+
+    // get what bin the particle is in
+    int dx = (particles[tid].x * NUM_BINS / size) + 1;
+    int dy = (particles[tid].y * NUM_BINS / size) + 1;
+    int bin_id = dx + (NUM_BINS+2)*dy;
+
+
+    for (int m = -1; m <= 1; m++) {
+        for (int n = -1; n <=1; n++) {
+
+            ptcl_2_id = bins[bin_id + n + (NUM_BINS+2)*m];
+            
+            while (part_2_id >= 0) {
+                apply_force(particles[tid], particles[ptcl_2_id]);
+                ptcl_2_id = part_links[ptcl_2_id];
+            }
+        }
+    }
 }
 
 __global__ void move_gpu(particle_t* particles, int num_parts, double size) {
@@ -71,32 +104,20 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
     // parts live in GPU memory
     // Do not do any particle simulation here
 
-
-    // NUM_THREADS is like a `block_size`. In total we'll have
-    // `num_parts` ptcls divided into thread blocks of size `NUM_THREADS`
+    // NUM_THREADS is like `block_size`. In total we'll have
+    // `num_parts` ptcls divided into blocks of size `NUM_THREADS`
     blks = (num_parts + NUM_THREADS - 1) / NUM_THREADS;
 
-    // call this "bins" (referring to the grid squares) as distinguished
-    // from "blocks" (referring to groups of GPU threads)
+    // call this "bins" (cells in the simulation grid) as distinguished
+    // from "blocks" (groups of GPU threads)
     NUM_BINS = size/cutoff;
-    // tot_num_bins = (NUM_BINS+2)*(NUM_BINS+2);
+    tot_num_bins = (NUM_BINS+2)*(NUM_BINS+2);
 
-    //implement w/out zero-padding for now    
-
-    // the number of particles in each bin
-    float *d_bin_counts;
-    cudaMalloc((void **)&d_bin_counts, (NUM_BINS+1)*sizeof(float));
-
-    // particle ids
-    int *d_part_ids;
-    cudaMalloc((void **)&d_part_ids, num_parts*sizeof(int));
-
-    // bins array, organized such that the particles in bin i
-    // are `part_ids[bins[i] : bins[i + 1]]`
-    int *d_bins;
+    cudaMalloc((void **)&d_part_links, num_parts*sizeof(int));
     cudaMalloc((void **)&d_bins, (NUM_BINS+1)*sizeof(int));
 
 }
+
 
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // parts live in GPU memory
@@ -110,11 +131,47 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     takes a fixed number of *particles*, not number of *bins*.
     */ 
 
+    // Initialize the bins and particle links arrays
+    initialize_array_gpu<<<blks, NUM_THREADS>>>(bins, tot_num_bins);
+    initialize_array_gpu<<<blks, NUM_THREADS>>>(part_links, num_parts);
 
+    assign_particles_to_bins_gpu<<<blks, NUM_THREADS>>>(bins, part_links,num_parts, parts, size, NUM_BLOCKS);
 
     // Compute forces
     compute_forces_gpu<<<blks, NUM_THREADS>>>(parts, num_parts);
 
     // Move particles
     move_gpu<<<blks, NUM_THREADS>>>(parts, num_parts, size);
+}
+
+__global__ void initialize_array_gpu(int* array, int array_size) {
+
+    // Get thread (particle) ID
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+
+    // Initialize the array with -1
+    if (tid >= array_size) {
+        return; 
+    }
+    
+    array[tid] = -1;
+    }
+
+__global__ void assign_particles_to_bins_gpu(int* bins, int* part_links, int num_parts, particle_t* parts, double size, int NUM_BLOCKS) {
+    // Get thread (particle) ID
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    // Initialize the particle links array
+     if (tid < num_parts) {
+        // NOTE: don't need this bit? since we did initialize_array_gpu
+        // atomicExch(&part_links[tid], -1);
+
+        // Get particle's row and column, with padding
+        int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
+        int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
+        int bin_id = dx + (NUM_BLOCKS+2)*dy;
+
+        // Fill in the bins
+        atomicExch(&part_links[tid], bins[bin_id]);
+        atomicExch(&bins[bin_id], tid);
+    }
 }
