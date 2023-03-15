@@ -163,8 +163,7 @@ __global__ void bin_particles(particle_t* parts, int* sorted_particles, int* bin
         // Goal: use some cuda atomics operation to fetch_add
         // Atomically read how_many_filled[bin_id] and at the same time increment it
         // I think we need to repurpose atomicCAS but i don't know howwwww
-
-    int loc_index = how_many_filled[bin_id].fetch_add(1, cuda::memory_order_relaxed);
+    int loc_index =  atomicAdd(&how_many_filled[bin_id], 1);
     sorted_particles[bin_index_start + loc_index] = tid; 
 }
 
@@ -195,7 +194,7 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
     tot_num_bins = (NUM_BLOCKS+2)*(NUM_BLOCKS+2);
 
     cudaMalloc((void**)&bin_ids, tot_num_bins * sizeof(int));
-    cudaMalloc((void**)&how_many_filled, num_parts * sizeof(int));
+    cudaMalloc((void**)&how_many_filled, tot_num_bins * sizeof(int));
     cudaMalloc((void**)&sorted_particles, num_parts * sizeof(int));
     
 }
@@ -207,6 +206,8 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(bin_ids, tot_num_bins);
     // Initialize the array of how_many_filled to have all 0's
     initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(how_many_filled, tot_num_bins);
+    // Initialize the array of how_many_filled to have all 0's
+    initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(sorted_particles, num_parts);
 
     // Count the number of particles per bin
     count_particles_per_bin<<<blks, NUM_THREADS>>>(parts, bin_ids, num_parts, size, NUM_BLOCKS);
@@ -222,6 +223,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
         // I have checked that this is the case
         // We don't need to worry about bin_id = 0 because that's a zero-pad bin
 
+    /*
     int* bin_counts_cpu = (int*) malloc(tot_num_bins * sizeof(int));
     int* part_links_cpu = (int*) malloc(num_parts * sizeof(int));
 
@@ -231,13 +233,22 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     for (int p = 0; p < tot_num_bins; p++) {
             std::cout << "testing bins " << p << " " <<bin_ids_cpu[p] <<  " " << " " << bin_counts_cpu[p] << std::endl;
     }
+    */
 
     // Add particles to an array ordered by what bin they're in
     bin_particles<<<blks, NUM_THREADS>>>(parts, sorted_particles, bin_ids, how_many_filled, num_parts, size, NUM_BLOCKS);
 
+    /*
+    int* bin_particles_cpu = (int*) malloc(num_parts * sizeof(int));
+    cudaMemcpy(bin_particles_cpu, sorted_particles, num_parts * sizeof(int), cudaMemcpyDeviceToHost);
+    for (int p = 0; p < num_parts; p++) {
+          std::cout << "testing sorted particles " << p << " " <<bin_particles_cpu[p]  << std::endl;
+    }
+    */
+
     // Compute forces
-    //compute_forces_gpu<<<blks, NUM_THREADS>>>(parts, num_parts);
+    compute_forces_gpu<<<blks, NUM_THREADS>>>(parts, sorted_particles, bin_ids, num_parts, size, NUM_BLOCKS);
 
     // Move particles
-    //move_gpu<<<blks, NUM_THREADS>>>(parts, num_parts, size);
+    move_gpu<<<blks, NUM_THREADS>>>(parts, num_parts, size);
 }
