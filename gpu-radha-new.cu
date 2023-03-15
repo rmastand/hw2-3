@@ -45,8 +45,40 @@ __global__ void compute_forces_gpu(particle_t* particles, int num_parts) {
         return;
 
     particles[tid].ax = particles[tid].ay = 0;
-    for (int j = 0; j < num_parts; j++)
-        apply_force_gpu(particles[tid], particles[j]);
+
+     // Get what row and column the particle would be in, with padding
+    int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
+    int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
+    // Get the bin id of the particle
+    int my_bin_id = dx + (NUM_BLOCKS+2)*dy;
+
+    // Iterate through the 3x3 neighboring bins
+    for (int m = -1; m <= 1; m++) {
+        for (int n = -1; n <=1; n++) {
+
+            // Get the bin_id of the neighboring bin
+            int their_bin_id = dx + m + (NUM_BLOCKS+2)*(dy+n);
+
+            // Iterate through all the particles in their_bin_id
+            int their_bin_id_start = bin_ids[their_bin_id - 1]
+            int next_bin_id_start = bin_ids[their_bin_id]
+
+            for (int j = their_bin_id_start; j < next_bin_id_start; j++){
+
+                particle_j_id = sorted_particles[j]
+            }
+
+
+                apply_force_gpu(particles[tid], particles[particle_j_id]);
+
+
+
+            
+      
+
+            }
+    }
+
 }
 
 __global__ void move_gpu(particle_t* particles, int num_parts, double size) {
@@ -115,7 +147,7 @@ __global__ void count_particles_per_bin(particle_t* parts, int* bin_ids, int num
 
 }
 
-__global__ void pseudo_sort_particles(particle_t* parts, int* bin_ids, int* how_many_filled, int num_parts, double size, int NUM_BLOCKS) {
+__global__ void pseudo_sort_particles(particle_t* parts, int* sorted_particles, int* bin_ids, int* how_many_filled, int num_parts, double size, int NUM_BLOCKS) {
 
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -137,6 +169,8 @@ __global__ void pseudo_sort_particles(particle_t* parts, int* bin_ids, int* how_
 
         int bin_index_start = bin_ids[bin_id - 1]; // Don't need to worry about bin_id = 0 due to zero-padding
         int loc_index = atomic.fetch_add(g.num_threads(), cuda::memory_order_relaxed);
+
+        sorted_particles[bin_index_start + loc_index] = parts[tid].id;
        
     }
 
@@ -205,7 +239,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     }
 
     // Add particles to separate array starting from bin idx
-    pseudo_sort_particles<<<blks, NUM_THREADS>>>(parts, bin_ids, how_many_filled, num_parts, size, NUM_BLOCKS);
+    pseudo_sort_particles<<<blks, NUM_THREADS>>>(parts, sorted_particles, bin_ids, how_many_filled, num_parts, size, NUM_BLOCKS);
 
     // Compute forces
     //compute_forces_gpu<<<blks, NUM_THREADS>>>(parts, num_parts);
