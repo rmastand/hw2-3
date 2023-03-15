@@ -18,6 +18,7 @@ int tot_num_bins;
 int* bin_ids;
 int* sorted_particles;
 // Array to store how many particles in a bin have been added to sorted_particles
+    // We use this to avoid conflicts when assigning each particle in index in the array sorted_particles
 int* how_many_filled;
 
 __device__ void apply_force_gpu(particle_t& particle, particle_t& neighbor) {
@@ -44,13 +45,12 @@ __global__ void compute_forces_gpu(particle_t* parts, int* sorted_particles, int
     if (tid >= num_parts)
         return;
 
+    // Initialize acceleration to 0
     parts[tid].ax = parts[tid].ay = 0;
 
      // Get what row and column the particle would be in, with padding
     int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
     int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
-    // Get the bin id of the particle
-    //int my_bin_id = dx + (NUM_BLOCKS+2)*dy;
 
     // Iterate through the 3x3 neighboring bins
     for (int m = -1; m <= 1; m++) {
@@ -146,23 +146,26 @@ __global__ void bin_particles(particle_t* parts, int* sorted_particles, int* bin
     if (tid >= num_parts) {
         return; 
     }
-    else {
-        // Get what row and column the particle would be in, with padding
-        int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
-        int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
-        // Get the bin id of the particle
-        int bin_id = dx + (NUM_BLOCKS+2)*dy;
 
-        // Get the id of where the particle will be stored in 
-            // The particles for that bin start at position in array bin_ids[bin_id - 1] in sorted_particles
-            // This particle goes to bin_ids[bin_id - 1] + loc_index
-            // get loc_index from an atomic fetch_add in how_many_filled[bin_id]
+    // Get what row and column the particle would be in, with padding
+    int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
+    int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
+    // Get the bin id of the particle
+    int bin_id = dx + (NUM_BLOCKS+2)*dy;
 
-        int bin_index_start = bin_ids[bin_id - 1]; // Don't need to worry about bin_id = 0 due to zero-padding
-        int loc_index = how_many_filled[bin_id].fetch_add(1, cuda::memory_order_relaxed);
+    // Get the id of where the particle will be stored in 
+        // The particles for that bin start at position in array bin_ids[bin_id - 1] in sorted_particles
+        // This particle goes to bin_ids[bin_id - 1] + loc_index
+        // get loc_index from an atomic fetch_add in how_many_filled[bin_id]
 
-        sorted_particles[bin_index_start + loc_index] = tid; //should this just be tid?  
-    }
+    int bin_index_start = bin_ids[bin_id - 1]; 
+    // THIS LINE IS FUCKED
+        // Goal: use some cuda atomics operation to fetch_add
+        // Atomically read how_many_filled[bin_id] and at the same time increment it
+        // I think we need to repurpose atomicCAS but i don't know howwwww
+
+    int loc_index = how_many_filled[bin_id].fetch_add(1, cuda::memory_order_relaxed);
+    sorted_particles[bin_index_start + loc_index] = tid; 
 }
 
 
@@ -202,21 +205,23 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
 
     // Initialize the array of bins_ids to have all 0's
     initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(bin_ids, tot_num_bins);
+    // Initialize the array of how_many_filled to have all 0's
     initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(how_many_filled, tot_num_bins);
 
-    // count the number of particles per bin
+    // Count the number of particles per bin
     count_particles_per_bin<<<blks, NUM_THREADS>>>(parts, bin_ids, num_parts, size, NUM_BLOCKS);
 
     int* bin_ids_cpu = (int*) malloc(tot_num_bins * sizeof(int));
     cudaMemcpy(bin_ids_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
 
-    // prefix sum bin_ids into bin_counts
+    // Prefix sum bin_ids into bin_counts
     thrust::inclusive_scan(thrust::device, bin_ids, bin_ids + tot_num_bins, bin_ids);
    
-    // HORRIBLE NAMING but from this point, bin_ids is bin_counts
+    // HORRIBLE NAMING but from this point, bin_ids represents bin_counts
     // The number of particles in bin_i is bin_counts[i] - bin_counts[i-1]
+        // I have checked that this is the case
+        // We don't need to worry about bin_id = 0 because that's a zero-pad bin
 
-    // test
     int* bin_counts_cpu = (int*) malloc(tot_num_bins * sizeof(int));
     int* part_links_cpu = (int*) malloc(num_parts * sizeof(int));
 
@@ -227,7 +232,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
             std::cout << "testing bins " << p << " " <<bin_ids_cpu[p] <<  " " << " " << bin_counts_cpu[p] << std::endl;
     }
 
-    // Add particles to separate array starting from bin idx
+    // Add particles to an array ordered by what bin they're in
     bin_particles<<<blks, NUM_THREADS>>>(parts, sorted_particles, bin_ids, how_many_filled, num_parts, size, NUM_BLOCKS);
 
     // Compute forces
