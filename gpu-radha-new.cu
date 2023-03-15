@@ -2,6 +2,8 @@
 #include <cuda.h>
 #include <iostream>
 #include <thrust/scan.h>
+#include <cuda/atomic>
+#include <cuda/atomic>
 
 
 #define NUM_THREADS 256
@@ -14,7 +16,9 @@ int tot_num_bins;
 
 // Initialize arrays for particle ids and bin ids
 int* bin_ids;
-int* particle_ids;
+int* sorted_particles;
+// Array to store how many particles in a bin have been added to sorted_particles
+int* how_many_filled;
 
 __device__ void apply_force_gpu(particle_t& particle, particle_t& neighbor) {
     double dx = neighbor.x - particle.x;
@@ -75,22 +79,6 @@ __global__ void move_gpu(particle_t* particles, int num_parts, double size) {
     }
 }
 
-void init_simulation(particle_t* parts, int num_parts, double size) {
-    // You can use this space to initialize data objects that you may need
-    // This function will be called once before the algorithm begins
-    // parts live in GPU memory
-    // Do not do any particle simulation here
-
-    blks = (num_parts + NUM_THREADS - 1) / NUM_THREADS;
-
-    // num blocks in either x or y direction (+2 in each dimension for padding)
-    NUM_BLOCKS = size/cutoff;
-    tot_num_bins = (NUM_BLOCKS+2)*(NUM_BLOCKS+2);
-
-    cudaMalloc((void**)&bin_ids, tot_num_bins * sizeof(int));
-    cudaMalloc((void**)&particle_ids, num_parts * sizeof(int));
-    
-}
 
 
 __global__ void initialize_array_zeros_gpu(int* array, int array_size) {
@@ -127,6 +115,32 @@ __global__ void count_particles_per_bin(particle_t* parts, int* bin_ids, int num
 
 }
 
+__global__ void pseudo_sort_particles(particle_t* parts, int* bin_ids, int* how_many_filled, int num_parts, double size, int NUM_BLOCKS) {
+
+    // Get thread (particle) ID
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+
+    if (tid >= num_parts) {
+        return; 
+    }
+    else {
+        // Get what row and column the particle would be in, with padding
+        int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
+        int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
+        // Get the bin id of the particle
+        int bin_id = dx + (NUM_BLOCKS+2)*dy;
+
+        // Get the id of where the particle will be stored in 
+            // The particles for that bin start at position in array bin_ids[bin_id - 1] in sorted_particles
+            // This particle goes to bin_ids[bin_id - 1] + loc_index
+            // get loc_index from an atomic fetch_add in how_many_filled[bin_id]
+
+        int bin_index_start = bin_ids[bin_id - 1]; // Don't need to worry about bin_id = 0 due to zero-padding
+        int loc_index = atomic.fetch_add(g.num_threads(), cuda::memory_order_relaxed);
+       
+    }
+
+}
 
 
 __global__ void initialize_5(int* array, int array_size) {
@@ -142,11 +156,30 @@ __global__ void initialize_5(int* array, int array_size) {
     }
 
 
+void init_simulation(particle_t* parts, int num_parts, double size) {
+    // You can use this space to initialize data objects that you may need
+    // This function will be called once before the algorithm begins
+    // parts live in GPU memory
+    // Do not do any particle simulation here
+
+    blks = (num_parts + NUM_THREADS - 1) / NUM_THREADS;
+
+    // num blocks in either x or y direction (+2 in each dimension for padding)
+    NUM_BLOCKS = size/cutoff;
+    tot_num_bins = (NUM_BLOCKS+2)*(NUM_BLOCKS+2);
+
+    cudaMalloc((void**)&bin_ids, tot_num_bins * sizeof(int));
+    cudaMalloc((void**)&how_many_filled, num_parts * sizeof(int));
+    cudaMalloc((void**)&sorted_particles, num_parts * sizeof(int));
+    
+}
+
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // parts live in GPU memory
 
     // Initialize the array of bins_ids to have all 0's
     initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(bin_ids, tot_num_bins);
+    initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(how_many_filled, tot_num_bins);
 
     // count the number of particles per bin
     count_particles_per_bin<<<blks, NUM_THREADS>>>(parts, bin_ids, num_parts, size, NUM_BLOCKS);
@@ -158,18 +191,21 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     thrust::inclusive_scan(thrust::device, bin_ids, bin_ids + tot_num_bins, bin_ids);
    
     // HORRIBLE NAMING but from this point, bin_ids is bin_counts
+    // The number of particles in bin_i is bin_counts[i] - bin_counts[i-1]
 
     // test
-    int* bin_counts_cup = (int*) malloc(tot_num_bins * sizeof(int));
+    int* bin_counts_cpu = (int*) malloc(tot_num_bins * sizeof(int));
     int* part_links_cpu = (int*) malloc(num_parts * sizeof(int));
 
-    cudaMemcpy(bin_counts_cup, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(bin_counts_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(part_links_cpu, particle_ids, num_parts * sizeof(int), cudaMemcpyDeviceToHost);
    
     for (int p = 0; p < tot_num_bins; p++) {
-            std::cout << "testing bins " << p << " " <<bin_ids_cpu[p] <<  " " << " " << bin_counts_cup[p] << std::endl;
+            std::cout << "testing bins " << p << " " <<bin_ids_cpu[p] <<  " " << " " << bin_counts_cpu[p] << std::endl;
     }
 
+    // Add particles to separate array starting from bin idx
+    pseudo_sort_particles<<<blks, NUM_THREADS>>>(parts, bin_ids, how_many_filled, num_parts, size, NUM_BLOCKS);
 
     // Compute forces
     //compute_forces_gpu<<<blks, NUM_THREADS>>>(parts, num_parts);
