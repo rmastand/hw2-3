@@ -38,19 +38,19 @@ __device__ void apply_force_gpu(particle_t& particle, particle_t& neighbor) {
     particle.ay += coef * dy;
 }
 
-__global__ void compute_forces_gpu(particle_t* particles, int num_parts) {
+__global__ void compute_forces_gpu(particle_t* parts, int* sorted_particles, int* bin_ids, int num_parts, double size, int NUM_BLOCKS) {
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (tid >= num_parts)
         return;
 
-    particles[tid].ax = particles[tid].ay = 0;
+    parts[tid].ax = parts[tid].ay = 0;
 
      // Get what row and column the particle would be in, with padding
     int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
     int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
     // Get the bin id of the particle
-    int my_bin_id = dx + (NUM_BLOCKS+2)*dy;
+    //int my_bin_id = dx + (NUM_BLOCKS+2)*dy;
 
     // Iterate through the 3x3 neighboring bins
     for (int m = -1; m <= 1; m++) {
@@ -60,25 +60,16 @@ __global__ void compute_forces_gpu(particle_t* particles, int num_parts) {
             int their_bin_id = dx + m + (NUM_BLOCKS+2)*(dy+n);
 
             // Iterate through all the particles in their_bin_id
-            int their_bin_id_start = bin_ids[their_bin_id - 1]
-            int next_bin_id_start = bin_ids[their_bin_id]
+            int their_bin_id_start = bin_ids[their_bin_id - 1];
+            int next_bin_id_start = bin_ids[their_bin_id];
 
             for (int j = their_bin_id_start; j < next_bin_id_start; j++){
 
-                particle_j_id = sorted_particles[j]
+                int particle_j_id = sorted_particles[j];
+                apply_force_gpu(parts[tid], parts[particle_j_id]);
             }
-
-
-                apply_force_gpu(particles[tid], particles[particle_j_id]);
-
-
-
-            
-      
-
-            }
+        }
     }
-
 }
 
 __global__ void move_gpu(particle_t* particles, int num_parts, double size) {
@@ -147,7 +138,7 @@ __global__ void count_particles_per_bin(particle_t* parts, int* bin_ids, int num
 
 }
 
-__global__ void pseudo_sort_particles(particle_t* parts, int* sorted_particles, int* bin_ids, int* how_many_filled, int num_parts, double size, int NUM_BLOCKS) {
+__global__ void bin_particles(particle_t* parts, int* sorted_particles, int* bin_ids, int* how_many_filled, int num_parts, double size, int NUM_BLOCKS) {
 
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -168,12 +159,10 @@ __global__ void pseudo_sort_particles(particle_t* parts, int* sorted_particles, 
             // get loc_index from an atomic fetch_add in how_many_filled[bin_id]
 
         int bin_index_start = bin_ids[bin_id - 1]; // Don't need to worry about bin_id = 0 due to zero-padding
-        int loc_index = atomic.fetch_add(g.num_threads(), cuda::memory_order_relaxed);
+        int loc_index = how_many_filled[bin_id].fetch_add(1, cuda::memory_order_relaxed);
 
-        sorted_particles[bin_index_start + loc_index] = parts[tid].id;
-       
+        sorted_particles[bin_index_start + loc_index] = tid; //should this just be tid?  
     }
-
 }
 
 
@@ -232,14 +221,14 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     int* part_links_cpu = (int*) malloc(num_parts * sizeof(int));
 
     cudaMemcpy(bin_counts_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(part_links_cpu, particle_ids, num_parts * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(part_links_cpu, sorted_particles, num_parts * sizeof(int), cudaMemcpyDeviceToHost);
    
     for (int p = 0; p < tot_num_bins; p++) {
             std::cout << "testing bins " << p << " " <<bin_ids_cpu[p] <<  " " << " " << bin_counts_cpu[p] << std::endl;
     }
 
     // Add particles to separate array starting from bin idx
-    pseudo_sort_particles<<<blks, NUM_THREADS>>>(parts, sorted_particles, bin_ids, how_many_filled, num_parts, size, NUM_BLOCKS);
+    bin_particles<<<blks, NUM_THREADS>>>(parts, sorted_particles, bin_ids, how_many_filled, num_parts, size, NUM_BLOCKS);
 
     // Compute forces
     //compute_forces_gpu<<<blks, NUM_THREADS>>>(parts, num_parts);
