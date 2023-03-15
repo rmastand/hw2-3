@@ -3,7 +3,7 @@
 #include <iostream>
 #include <thrust/scan.h>
 #include <cuda/atomic>
-#include <cuda/atomic>
+#include <thrust/device_vector.h>
 
 
 #define NUM_THREADS 256
@@ -131,6 +131,7 @@ __global__ void count_particles_per_bin(particle_t* parts, int* bin_ids, int num
         int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
         // Get the bin id of the particle
         int bin_id = dx + (NUM_BLOCKS+2)*dy;
+        
 
         // Increment the relevant bin_id
         atomicAdd(&bin_ids[bin_id], 1);
@@ -159,10 +160,9 @@ __global__ void bin_particles(particle_t* parts, int* sorted_particles, int* bin
         // get loc_index from an atomic fetch_add in how_many_filled[bin_id]
 
     int bin_index_start = bin_ids[bin_id - 1]; 
-    // THIS LINE IS FUCKED
-        // Goal: use some cuda atomics operation to fetch_add
+
+    // Use some cuda atomics operation to fetch_add
         // Atomically read how_many_filled[bin_id] and at the same time increment it
-        // I think we need to repurpose atomicCAS but i don't know howwwww
     int loc_index =  atomicAdd(&how_many_filled[bin_id], 1);
     sorted_particles[bin_index_start + loc_index] = tid; 
 }
@@ -201,7 +201,8 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
 
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // parts live in GPU memory
-
+    int device_num;
+    cudaGetDevice(&device_num);
     // Initialize the array of bins_ids to have all 0's
     initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(bin_ids, tot_num_bins);
     // Initialize the array of how_many_filled to have all 0's
@@ -212,11 +213,36 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // Count the number of particles per bin
     count_particles_per_bin<<<blks, NUM_THREADS>>>(parts, bin_ids, num_parts, size, NUM_BLOCKS);
 
-    int* bin_ids_cpu = (int*) malloc(tot_num_bins * sizeof(int));
-    cudaMemcpy(bin_ids_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+    //particle_t* parts_cpu = (particle_t*) malloc(num_parts * sizeof(particle_t));
+    //cudaMemcpy(parts_cpu, parts, num_parts * sizeof(particle_t), cudaMemcpyDeviceToHost);
 
+    //int* bin_ids_cpu = (int*) malloc(tot_num_bins * sizeof(int));
+    //cudaMemcpy(bin_ids_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // for (int p = 0; p < tot_num_bins; p++) {
+    //        std::cout << "testing bins " << p << " " <<bin_ids_cpu[p] << std::endl;
+    //}
+    /*
+    for(int i = 0; i < num_parts; i++){
+        // Get what row and column the particle would be in, with padding
+        int dx = (parts_cpu[i].x * NUM_BLOCKS / size) + 1;
+        int dy = (parts_cpu[i].y * NUM_BLOCKS / size) + 1;
+        // Get the bin id of the particle
+        int bin_id = dx + (NUM_BLOCKS+2)*dy;
+        if(bin_id >= 100)
+            std::cout << bin_id <<"\n";
+    
+    }
+    */
+
+    //int* bin_ids_cpu = (int*) malloc(tot_num_bins * sizeof(int));
+    //cudaMemcpy(bin_ids_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+
+    thrust::device_ptr<int> dev_ptr = thrust::device_pointer_cast(bin_ids);
     // Prefix sum bin_ids into bin_counts
-    thrust::inclusive_scan(thrust::device, bin_ids, bin_ids + tot_num_bins, bin_ids);
+    std::cout << "before: " << tot_num_bins << "\n";
+    thrust::inclusive_scan(thrust::device, dev_ptr, dev_ptr + tot_num_bins, dev_ptr);
+    std::cout << "after: " << tot_num_bins << "\n";
    
     // HORRIBLE NAMING but from this point, bin_ids represents bin_counts
     // The number of particles in bin_i is bin_counts[i] - bin_counts[i-1]
