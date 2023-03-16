@@ -42,31 +42,33 @@ __device__ void apply_force_gpu(particle_t& particle, particle_t& neighbor) {
 __global__ void compute_forces_gpu(particle_t* parts, int* sorted_particles, int* bin_ids, int num_parts, double size, int NUM_BLOCKS) {
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid >= num_parts)
-        return;
+    int stride = blockDim.x * gridDim.x;
 
-    // Initialize acceleration to 0
-    parts[tid].ax = parts[tid].ay = 0;
+    for (int loc_tid = tid; loc_tid < num_parts; loc_tid += stride ) {
 
-     // Get what row and column the particle would be in, with padding
-    int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
-    int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
+        // Initialize acceleration to 0
+        parts[loc_tid].ax = parts[loc_tid].ay = 0;
 
-    // Iterate through the 3x3 neighboring bins
-    for (int m = -1; m <= 1; m++) {
-        for (int n = -1; n <=1; n++) {
+        // Get what row and column the particle would be in, with padding
+        int dx = (parts[loc_tid].x * NUM_BLOCKS / size) + 1;
+        int dy = (parts[loc_tid].y * NUM_BLOCKS / size) + 1;
 
-            // Get the bin_id of the neighboring bin
-            int their_bin_id = dx + m + (NUM_BLOCKS+2)*(dy+n);
+        // Iterate through the 3x3 neighboring bins
+        for (int m = -1; m <= 1; m++) {
+            for (int n = -1; n <=1; n++) {
 
-            // Iterate through all the particles in their_bin_id
-            int their_bin_id_start = bin_ids[their_bin_id - 1];
-            int next_bin_id_start = bin_ids[their_bin_id];
+                // Get the bin_id of the neighboring bin
+                int their_bin_id = dx + m + (NUM_BLOCKS+2)*(dy+n);
 
-            for (int j = their_bin_id_start; j < next_bin_id_start; j++){
+                // Iterate through all the particles in their_bin_id
+                int their_bin_id_start = bin_ids[their_bin_id - 1];
+                int next_bin_id_start = bin_ids[their_bin_id];
 
-                int particle_j_id = sorted_particles[j];
-                apply_force_gpu(parts[tid], parts[particle_j_id]);
+                for (int j = their_bin_id_start; j < next_bin_id_start; j++){
+
+                    int particle_j_id = sorted_particles[j];
+                    apply_force_gpu(parts[loc_tid], parts[particle_j_id]);
+                }
             }
         }
     }
@@ -76,65 +78,64 @@ __global__ void move_gpu(particle_t* particles, int num_parts, double size) {
 
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid >= num_parts)
-        return;
+    int stride = blockDim.x * gridDim.x;
 
-    particle_t* p = &particles[tid];
-    //
-    //  slightly simplified Velocity Verlet integration
-    //  conserves energy better than explicit Euler method
-    //
-    p->vx += p->ax * dt;
-    p->vy += p->ay * dt;
-    p->x += p->vx * dt;
-    p->y += p->vy * dt;
+    for (int loc_tid = tid; loc_tid < num_parts; loc_tid += stride ) {
 
-    //
-    //  bounce from walls
-    //
-    while (p->x < 0 || p->x > size) {
-        p->x = p->x < 0 ? -(p->x) : 2 * size - p->x;
-        p->vx = -(p->vx);
-    }
-    while (p->y < 0 || p->y > size) {
-        p->y = p->y < 0 ? -(p->y) : 2 * size - p->y;
-        p->vy = -(p->vy);
-    }
+        particle_t* p = &particles[loc_tid];
+        //
+        //  slightly simplified Velocity Verlet integration
+        //  conserves energy better than explicit Euler method
+        //
+        p->vx += p->ax * dt;
+        p->vy += p->ay * dt;
+        p->x += p->vx * dt;
+        p->y += p->vy * dt;
+
+        //
+        //  bounce from walls
+        //
+        while (p->x < 0 || p->x > size) {
+            p->x = p->x < 0 ? -(p->x) : 2 * size - p->x;
+            p->vx = -(p->vx);
+        }
+        while (p->y < 0 || p->y > size) {
+            p->y = p->y < 0 ? -(p->y) : 2 * size - p->y;
+            p->vy = -(p->vy);
+        }
+    }   
 }
-
 
 
 __global__ void initialize_array_zeros_gpu(int* array, int array_size) {
 
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
 
     // Initialize the array with -1
-    if (tid >= array_size) {
-        return; 
+    for (int loc_tid = tid; loc_tid < array_size; loc_tid += stride ) {
+        array[loc_tid] = 0;
     }
-        array[tid] = 0;
-    }
+ 
+}
 
 
 __global__ void count_particles_per_bin(particle_t* parts, int* bin_ids, int num_parts, double size, int NUM_BLOCKS) {
 
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
 
-    if (tid >= num_parts) {
-        return; 
-    }
-    else {
+    for (int loc_tid = tid; loc_tid < num_parts; loc_tid += stride ) {
         // Get what row and column the particle would be in, with padding
-        int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
-        int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
+        int dx = (parts[loc_tid].x * NUM_BLOCKS / size) + 1;
+        int dy = (parts[loc_tid].y * NUM_BLOCKS / size) + 1;
         // Get the bin id of the particle
         int bin_id = dx + (NUM_BLOCKS+2)*dy;
         
-
         // Increment the relevant bin_id
-        atomicAdd(&bin_ids[bin_id], 1);
+        int x = atomicAdd(&bin_ids[bin_id], 1);
     }
 
 }
@@ -143,42 +144,31 @@ __global__ void bin_particles(particle_t* parts, int* sorted_particles, int* bin
 
     // Get thread (particle) ID
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
 
-    if (tid >= num_parts) {
-        return; 
+    for (int loc_tid = tid; loc_tid < num_parts; loc_tid += stride ) {
+        // Get what row and column the particle would be in, with padding
+        int dx = (parts[loc_tid].x * NUM_BLOCKS / size) + 1;
+        int dy = (parts[loc_tid].y * NUM_BLOCKS / size) + 1;
+        // Get the bin id of the particle
+        int bin_id = dx + (NUM_BLOCKS+2)*dy;
+
+        // Get the id of where the particle will be stored in 
+            // The particles for that bin start at position in array bin_ids[bin_id - 1] in sorted_particles
+            // This particle goes to bin_ids[bin_id - 1] + loc_index
+            // get loc_index from an atomic fetch_add in how_many_filled[bin_id]
+
+        int bin_index_start = bin_ids[bin_id - 1]; 
+
+        // Use some cuda atomics operation to fetch_add
+            // Atomically read how_many_filled[bin_id] and at the same time increment it
+        int loc_index =  atomicAdd(&how_many_filled[bin_id], 1);
+        sorted_particles[bin_index_start + loc_index] = loc_tid; 
     }
-
-    // Get what row and column the particle would be in, with padding
-    int dx = (parts[tid].x * NUM_BLOCKS / size) + 1;
-    int dy = (parts[tid].y * NUM_BLOCKS / size) + 1;
-    // Get the bin id of the particle
-    int bin_id = dx + (NUM_BLOCKS+2)*dy;
-
-    // Get the id of where the particle will be stored in 
-        // The particles for that bin start at position in array bin_ids[bin_id - 1] in sorted_particles
-        // This particle goes to bin_ids[bin_id - 1] + loc_index
-        // get loc_index from an atomic fetch_add in how_many_filled[bin_id]
-
-    int bin_index_start = bin_ids[bin_id - 1]; 
-
-    // Use some cuda atomics operation to fetch_add
-        // Atomically read how_many_filled[bin_id] and at the same time increment it
-    int loc_index =  atomicAdd(&how_many_filled[bin_id], 1);
-    sorted_particles[bin_index_start + loc_index] = tid; 
 }
 
 
-__global__ void initialize_5(int* array, int array_size) {
 
-    // Get thread (particle) ID
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-
-    // Initialize the array with -1
-    if (tid >= array_size) {
-        return; 
-    }
-        array[tid] = 5;
-    }
 
 
 void init_simulation(particle_t* parts, int num_parts, double size) {
@@ -201,8 +191,7 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
 
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // parts live in GPU memory
-    int device_num;
-    cudaGetDevice(&device_num);
+
     // Initialize the array of bins_ids to have all 0's
     initialize_array_zeros_gpu<<<blks, NUM_THREADS>>>(bin_ids, tot_num_bins);
     // Initialize the array of how_many_filled to have all 0's
@@ -213,64 +202,16 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // Count the number of particles per bin
     count_particles_per_bin<<<blks, NUM_THREADS>>>(parts, bin_ids, num_parts, size, NUM_BLOCKS);
 
-    //particle_t* parts_cpu = (particle_t*) malloc(num_parts * sizeof(particle_t));
-    //cudaMemcpy(parts_cpu, parts, num_parts * sizeof(particle_t), cudaMemcpyDeviceToHost);
+    // Parallel prefix sum
+    thrust::inclusive_scan(thrust::device, bin_ids, bin_ids + tot_num_bins, bin_ids);
 
-    //int* bin_ids_cpu = (int*) malloc(tot_num_bins * sizeof(int));
-    //cudaMemcpy(bin_ids_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
-
-    // for (int p = 0; p < tot_num_bins; p++) {
-    //        std::cout << "testing bins " << p << " " <<bin_ids_cpu[p] << std::endl;
-    //}
-    /*
-    for(int i = 0; i < num_parts; i++){
-        // Get what row and column the particle would be in, with padding
-        int dx = (parts_cpu[i].x * NUM_BLOCKS / size) + 1;
-        int dy = (parts_cpu[i].y * NUM_BLOCKS / size) + 1;
-        // Get the bin id of the particle
-        int bin_id = dx + (NUM_BLOCKS+2)*dy;
-        if(bin_id >= 100)
-            std::cout << bin_id <<"\n";
-    
-    }
-    */
-
-    //int* bin_ids_cpu = (int*) malloc(tot_num_bins * sizeof(int));
-    //cudaMemcpy(bin_ids_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
-
-    thrust::device_ptr<int> dev_ptr = thrust::device_pointer_cast(bin_ids);
-    // Prefix sum bin_ids into bin_counts
-    std::cout << "before: " << tot_num_bins << "\n";
-    thrust::inclusive_scan(thrust::device, dev_ptr, dev_ptr + tot_num_bins, dev_ptr);
-    std::cout << "after: " << tot_num_bins << "\n";
-   
     // HORRIBLE NAMING but from this point, bin_ids represents bin_counts
     // The number of particles in bin_i is bin_counts[i] - bin_counts[i-1]
         // I have checked that this is the case
         // We don't need to worry about bin_id = 0 because that's a zero-pad bin
 
-    /*
-    int* bin_counts_cpu = (int*) malloc(tot_num_bins * sizeof(int));
-    int* part_links_cpu = (int*) malloc(num_parts * sizeof(int));
-
-    cudaMemcpy(bin_counts_cpu, bin_ids, tot_num_bins * sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(part_links_cpu, sorted_particles, num_parts * sizeof(int), cudaMemcpyDeviceToHost);
-   
-    for (int p = 0; p < tot_num_bins; p++) {
-            std::cout << "testing bins " << p << " " <<bin_ids_cpu[p] <<  " " << " " << bin_counts_cpu[p] << std::endl;
-    }
-    */
-
     // Add particles to an array ordered by what bin they're in
     bin_particles<<<blks, NUM_THREADS>>>(parts, sorted_particles, bin_ids, how_many_filled, num_parts, size, NUM_BLOCKS);
-
-    /*
-    int* bin_particles_cpu = (int*) malloc(num_parts * sizeof(int));
-    cudaMemcpy(bin_particles_cpu, sorted_particles, num_parts * sizeof(int), cudaMemcpyDeviceToHost);
-    for (int p = 0; p < num_parts; p++) {
-          std::cout << "testing sorted particles " << p << " " <<bin_particles_cpu[p]  << std::endl;
-    }
-    */
 
     // Compute forces
     compute_forces_gpu<<<blks, NUM_THREADS>>>(parts, sorted_particles, bin_ids, num_parts, size, NUM_BLOCKS);
