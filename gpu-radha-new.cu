@@ -135,7 +135,7 @@ __global__ void count_particles_per_bin(particle_t* parts, int* bin_ids, int num
         int bin_id = dx + (NUM_BLOCKS+2)*dy;
         
         // Increment the relevant bin_id
-        int x = atomicAdd(&bin_ids[bin_id], 1);
+        atomicAdd(&bin_ids[bin_id], 1);
     }
 
 }
